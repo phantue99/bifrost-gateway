@@ -21,6 +21,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
+	blockstore "github.com/ipfs/go-ipfs-blockstore"
+	"github.com/ipfs/go-blockservice/tikv"
 )
 
 func main() {
@@ -31,32 +33,30 @@ func main() {
 }
 
 func init() {
-	rootCmd.Flags().String("saturn-orchestrator", "", "url of the saturn orchestrator endpoint")
-	rootCmd.Flags().String("saturn-logger", "", "url of the saturn logging endpoint")
+	rootCmd.Flags().String("uploader-endpoint", "", "url of the uploader endpoint")
 	rootCmd.Flags().StringSlice("kubo-rpc", []string{}, "Kubo RPC nodes that will handle /api/v0 requests (can be set multiple times)")
 	rootCmd.Flags().Int("gateway-port", 8080, "gateway port")
 	rootCmd.Flags().Int("metrics-port", 8040, "metrics port")
 
-	rootCmd.MarkFlagRequired("saturn-orchestrator")
-	rootCmd.MarkFlagRequired("saturn-logger")
+	rootCmd.MarkFlagRequired("uploader-endpoint")
 	rootCmd.MarkFlagRequired("kubo-rpc")
 }
 
 var rootCmd = &cobra.Command{
-	Use:               name,
+	Use:               "ipfs-gateway",
 	Version:           version,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	Short:             "IPFS Gateway implementation for https://github.com/protocol/bifrost-infra",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		saturnOrchestrator, _ := cmd.Flags().GetString("saturn-orchestrator")
-		saturnLogger, _ := cmd.Flags().GetString("saturn-logger")
+		uploaderEndpoint, _ := cmd.Flags().GetString("uploader-endpoint")
 		kuboRPC, _ := cmd.Flags().GetStringSlice("kubo-rpc")
 		gatewayPort, _ := cmd.Flags().GetInt("gateway-port")
 		metricsPort, _ := cmd.Flags().GetInt("metrics-port")
 
-		log.Printf("Starting %s %s", name, version)
+		log.Printf("Starting ipfs-gateway %s", version)
 
-		gatewaySrv, err := makeGatewayHandler(saturnOrchestrator, saturnLogger, kuboRPC, gatewayPort)
+		tikv.InitStore()
+		gatewaySrv, err := makeGatewayHandler(uploaderEndpoint, kuboRPC, gatewayPort)
 		if err != nil {
 			return err
 		}
@@ -105,14 +105,13 @@ var rootCmd = &cobra.Command{
 	},
 }
 
-func makeGatewayHandler(saturnOrchestrator, saturnLogger string, kuboRPC []string, port int) (*http.Server, error) {
-	blockStore, err := newBlockStore(saturnOrchestrator, saturnLogger)
-	if err != nil {
-		return nil, err
-	}
+func makeGatewayHandler(uploaderEndpoint string ,kuboRPC []string, port int) (*http.Server, error) {
+	var bs blockstore.Blockstore
 
 	// Sets up an offline (no exchange) blockService based on the Saturn block store.
-	blockService := blockservice.New(blockStore, offline.Exchange(blockStore))
+	blockService := blockservice.New(bs, offline.Exchange(bs))
+
+	blockservice.InitUploader(uploaderEndpoint)
 
 	// // Sets up the routing system, which will proxy the IPNS routing requests to the given gateway.
 	routing := newProxyRouting(kuboRPC)
